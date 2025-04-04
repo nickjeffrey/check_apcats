@@ -17,7 +17,7 @@
 #      # Parameters are SNMP community name
 #      define service {
 #              use                             generic-service
-#              hostgroup_name                  all_apcats
+#              hostgroup_name                  all_apc_ats
 #              service_description             APC ATS
 #              check_command                   check_apcats!public
 #              }
@@ -119,7 +119,7 @@ sub get_options {
    # If the user supplied -h or --help, generate the help messages
    #
    if( defined( $opt_h ) ) {
-      print "Nagios plugin for determining APC PDU power consumption. \n";
+      print "Nagios plugin for determining APC ATS power redundancy. \n";
       print "Examples: \n";
       print "   $0 --host=myhost --community=public \n";
       print "   $0     -H myhost          -C public \n";
@@ -186,7 +186,7 @@ sub sanity_checks {
 
 sub check_ats {
    #
-   # query the SNMP counters to see the current power consumption on the PDU
+   # query the SNMP counters to get details about the device
    # This uses the APC PowerNet MIB
    #
    print "running check_ats subroutine \n" if ($verbose eq "yes");
