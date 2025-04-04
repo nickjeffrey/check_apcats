@@ -40,8 +40,8 @@ APC ATS WARN - Redundant power lost, cannot failover to alternate source!. Activ
 ```
 
 When both of the power sources are up, the web management interface will look similar to:
-<imgr src=images/redundant_power.png>
+<img src=images/redundant_power.png>
 
 
 If one of the redundant power sources is down, the web management interface will look similar to:
-<imgr src=images/non_redundant_power.png>
+<img src=images/non_redundant_power.png>
