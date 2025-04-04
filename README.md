@@ -13,7 +13,7 @@ You will need a section in the services.cfg file on the nagios server that looks
               use                             generic-service
               hostgroup_name                  all_apcats
               service_description             APC ATS
-              check_command                   check_apcpdu!public
+              check_command                   check_apcats!public
               }
 ```
 
