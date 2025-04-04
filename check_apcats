@@ -1,0 +1,342 @@
+#!/usr/bin/perl -w
+
+
+# CHANGE LOG
+# ----------
+# 2025/04/03	njeffrey	Script created to monitor status of APC AP7721 Automatic Transfer Switch
+
+
+# nagios shell script to query APC AP7721 ATS for health status 
+
+
+# NOTES
+# -----
+#  You will need a section in the services.cfg
+#  file on the nagios server that looks similar to the following.
+#      # Define a service to check the APC ATS
+#      # Parameters are SNMP community name
+#      define service {
+#              use                             generic-service
+#              hostgroup_name                  all_apcats
+#              service_description             APC ATS
+#              check_command                   check_apcats!public
+#              }
+#
+#
+#  You will also need a command definition similar to the following in commands.cfg on the nagios server
+#      # 'check_apcats' command definition
+#      # parameters are -H hostname -C snmp_community
+#      define command{
+#              command_name    check_apcats
+#              command_line    $USER1$/check_apcats -H $HOSTADDRESS$ -C $ARG1$
+#              }
+#
+#
+
+# Different APC ATS may use slightly different OID values.  
+# All the OID values will be under this part of the MIB tree
+#     .iso.org.dod.internet.private.enterprises.apc.products.hardware.automaticTransferSwitch
+#     1.3.6.1.4.1.318.1.1.8   
+# 
+# #These OID values are from model AP7721
+# 
+# 1.3.6.1.4.1.318.1.1.8.1.5.0 atsIdentModelNumber    Model number of the device 
+# 1.3.6.1.4.1.318.1.1.8.1.6.0 atsIdentSerialNumber   Serial number of the device
+#
+# 1.3.6.1.4.1.318.1.1.8.4.1 atsConfigProductName     A character string that names the Automatic Transfer Switch.
+
+# 1.3.6.1.4.1.318.1.1.8.4.2 atsConfigPreferredSource The preferred source of power when both sources are functioning properly: 
+#                                                    source A (1), source B (2), or none (3)
+#
+# 1.3.6.1.4.1.318.1.1.8.5.1.1 atsStatusCommStatus    The current communication status of the Automatic Transfer Switch: 
+#                                                    atsNeverDiscovered (1), atsCommEstablished (2), or atsCommLost (3).
+#                                                    
+# 1.3.6.1.4.1.318.1.1.8.5.1.2 atsStatusSelectedSource  The current source of power to the Automatic Transfer Switch: 
+#                                                      source A (1) or source B (2).
+
+# 1.3.6.1.4.1.318.1.1.8.5.1.3 atsStatusRedundancyState The Automatic Transfer Switch’s current state of redundancy:
+#                                                      1= atsRedundancyLost : cannot switch to the alternate power source 
+#                                                         if the power source that it is using fails.
+#                                                      2= atsFullyRedundant : can switch to the alternate power source 
+#                                                           if the power source that it is using fails.
+#
+# 
+
+
+
+
+
+
+
+
+
+
+use strict;				#enforce good coding practices
+use Getopt::Long;                       #allow --long-switches to be used as parameters.  Install with: perl -MCPAN -e 'install Getopt::Long'
+
+
+
+# declare variables
+my ($OK,$WARN,$CRITICAL,$UNKNOWN);
+my ($CHECK_NAME,$cmd,$snmpwalk,$snmpget);
+my ($host,$oid,$key,%apcats,$community);
+my ($opt_h,$opt_v,$opt_C,$opt_H);
+my ($verbose,$output_details,$perf_data);
+$cmd = "";                                              #initialize variable
+$CHECK_NAME                 = "APC ATS";		#name of nagios check
+$verbose                    = "no";                    	#yes/no variable to increase output for debugging
+$community                  = "public";  		#default SNMP community name
+$output_details             = "";			#initialize variable to hold details of script output
+$snmpwalk                   = "/usr/bin/snmpwalk";	#location of binary
+$snmpget                    = "/usr/bin/snmpget";	#location of binary
+#
+# Nagios return codes
+#
+$OK=            0;
+$WARN=          1;
+$CRITICAL=      2;
+$UNKNOWN=       3;
+
+
+
+
+sub get_options {
+   #
+   # this gets the command line parameters provided by the users
+   #
+   print "running get_options subroutine \n" if ($verbose eq "yes");
+   #
+   Getopt::Long::Configure('bundling');
+   GetOptions(
+      "h"   => \$opt_h, "help"        => \$opt_h,
+      "v"   => \$opt_v, "verbose"     => \$opt_v,
+      "C=s" => \$opt_C, "community=s" => \$opt_C, "comm=s" => \$opt_C,
+      "H=s" => \$opt_H, "hostname=s"  => \$opt_H, "host=s" => \$opt_H,
+   );
+   #
+   #
+   #
+   # If the user supplied -h or --help, generate the help messages
+   #
+   if( defined( $opt_h ) ) {
+      print "Nagios plugin for determining APC PDU power consumption. \n";
+      print "Examples: \n";
+      print "   $0 --host=myhost --community=public \n";
+      print "   $0     -H myhost          -C public \n";
+      print "\n\n";
+      exit $UNKNOWN;
+   }
+   #
+   # If the user supplied -v or --verbose, increase verbosity for debugging
+   if( defined( $opt_v ) ) {
+      $verbose = "yes";
+   } 
+   #
+   #
+   # If the user did not supply a --community SNMP community string, use "public"
+   #
+   if( defined( $opt_C ) ) {
+      $community = $opt_C;
+   } else {
+      $community = "public";
+   }
+   #
+   # If the user did not supply a --host=??? , generate a warning
+   #
+   if( defined( $opt_H ) ) {
+      $host = $opt_H;
+   } else {
+      print "$CHECK_NAME UNKNOWN - a remote host to check was not provided. Use this syntax: $0 -H hostname -C snmp_community\n";
+      exit $CRITICAL;                                           #exit script
+   }
+   #
+   print "host=$host community=$community \n" if ($verbose eq "yes");
+}                       #end of subroutine
+
+
+
+
+
+sub sanity_checks {
+   #
+   #
+   print "running sanity_checks subroutine \n" if ($verbose eq "yes");
+   #
+   #
+   if ( ! -f "$snmpwalk" ) {
+      print "ERROR: Cannot find $snmpwalk \n";
+      exit;
+   }
+   if ( ! -x "$snmpwalk" ) {
+      print "ERROR: $snmpwalk is not executable by the current user\n";
+      exit;
+   }
+   if ( ! -f "$snmpget" ) {
+      print "ERROR: Cannot find $snmpget \n";
+      exit;
+   }
+   if ( ! -x "$snmpget" ) {
+      print "ERROR: $snmpget is not executable by the current user\n";
+      exit;
+   }
+}                                                       #end of subroutine
+
+
+
+
+sub check_ats {
+   #
+   # query the SNMP counters to see the current power consumption on the PDU
+   # This uses the APC PowerNet MIB
+   #
+   print "running check_ats subroutine \n" if ($verbose eq "yes");
+   #
+   # get the model number
+   #
+   $oid = ".1.3.6.1.4.1.318.1.1.8.1.5.0";                             
+   $cmd = "$snmpget -Onq -v 1 -c $community $host $oid";
+   print "   Checking model number with: $cmd \n" if ($verbose eq "yes");
+   $apcats{atsIdentModelNumber} = "unknown";				#initialize variable
+   #
+   open(IN,"$cmd |");                                                   #get the index numbers of the LUNs
+   while (<IN>) {                                                       #read a line from the command output
+      s/\"//g;                                                          #get rid of quotation marks
+      if ( /$oid ([a-zA-Z0-9]+)/ ) {         				
+         $apcats{atsIdentModelNumber} = $1;   	         		#assign value to hash
+         print "   Model number: $apcats{atsIdentModelNumber}  \n" if ($verbose eq "yes");
+      }
+   }                                                                    #end of while loop
+   close IN;								#close filehandle
+   #
+   # get the serial number
+   #
+   $oid = ".1.3.6.1.4.1.318.1.1.8.1.6.0";                             
+   $cmd = "$snmpget -Onq -v 1 -c $community $host $oid";
+   print "   Checking serial number with: $cmd \n" if ($verbose eq "yes");
+   $apcats{atsIdentSerialNumber} = "unknown";				#initialize variable
+   #
+   open(IN,"$cmd |");                                                   #get the index numbers of the LUNs
+   while (<IN>) {                                                       #read a line from the command output
+      s/\"//g;                                                          #get rid of quotation marks
+      if ( /$oid ([a-zA-Z0-9]+)/ ) {         				
+         $apcats{atsIdentSerialNumber} = $1;   	         		#assign value to hash
+         print "   Serial number: $apcats{atsIdentSerialNumber}  \n" if ($verbose eq "yes");
+      }
+   }                                                                    #end of while loop
+   close IN;								#close filehandle
+   #
+   # get the currently active power source
+   # 1.3.6.1.4.1.318.1.1.8.5.1.2 atsStatusSelectedSource  
+   # The current source of power to the Automatic Transfer Switch: source A (1) or source B (2).
+   #
+   $oid = ".1.3.6.1.4.1.318.1.1.8.5.1.2.0";                             
+   $cmd = "$snmpget -Onq -v 1 -c $community $host $oid";
+   print "   Checking current power source with: $cmd \n" if ($verbose eq "yes");
+   $apcats{atsStatusSelectedSource} = "unknown";				#initialize variable
+   #
+   open(IN,"$cmd |");                                                   #get the index numbers of the LUNs
+   while (<IN>) {                                                       #read a line from the command output
+      s/\"//g;                                                          #get rid of quotation marks
+      if ( /$oid ([0-9]+)/ ) {         				
+         $apcats{atsStatusSelectedSource} = $1;   	         		#assign value to hash
+         print "   Current power source: $apcats{atsStatusSelectedSource}  \n" if ($verbose eq "yes");
+      }
+   }                                                                    #end of while loop
+   close IN;								#close filehandle
+   #
+   # get the redundancy state
+   # 1.3.6.1.4.1.318.1.1.8.5.1.3 atsStatusRedundancyState  
+   # The Automatic Transfer Switch’s current state of redundancy:
+   # atsRedundancyLost (1): The ATS cannot switch to the alternate power source if the power source that it is using fails.
+   # atsFullyRedundant (2): The ATS can    switch to the alternate power source if the power source that it is using fails.
+   #
+   #
+   $oid = ".1.3.6.1.4.1.318.1.1.8.5.1.3.0";                             
+   $cmd = "$snmpget -Onq -v 1 -c $community $host $oid";
+   print "   Checking current redundancy state with: $cmd \n" if ($verbose eq "yes");
+   $apcats{atsStatusRedundancyState} = "unknown";			#initialize variable
+   #
+   open(IN,"$cmd |");                                                   #get the index numbers of the LUNs
+   while (<IN>) {                                                       #read a line from the command output
+      s/\"//g;                                                          #get rid of quotation marks
+      if ( /$oid ([0-9]+)/ ) {         				
+         $apcats{atsStatusRedundancyState} = $1;   	         		#assign value to hash
+         print "   Redundancy state: $apcats{atsStatusRedundancyState}  \n" if ($verbose eq "yes");
+      }
+   }                                                                    #end of while loop
+   close IN;								#close filehandle
+}                                                                       #end of subroutine
+
+
+
+
+sub print_output {
+   #
+   # print output in the format expected by nagios
+   #
+   print "running print_output subroutine \n" if ($verbose eq "yes");
+   #
+   # The nagios performance data will be the same for all the outputs, so just put it in a variable that can be use by all the output options
+   #
+   # The format is:  label=value[UOM];[warn];[crit];[min];[max]
+   # On the "label=value" section is required.  The warn|crit|min|max entries are optional.
+   # You can have multiple items of perf data, just separate each section with a space
+   # UOM is Units Of Measurement.    Can be s=seconds B=bytes MB=megabytes %=percent c=counter
+   # You can use the standard nagios ranges and thresholds formats (examples below)
+   # Range definition	Generate an alert if x...
+   # ----------------   -------------------------
+   # 10	                < 0 or > 10, (outside the range of {0 .. 10})
+   # 10:	        < 10, (outside {10 .. âˆž})
+   # ~:10	        > 10, (outside the range of {-âˆž .. 10})
+   # 10:20	        < 10 or > 20, (outside the range of {10 .. 20})
+   # @10:20	        â‰¥ 10 and â‰¤ 20, (inside the range of {10 .. 20})
+   #
+   $perf_data = "";
+   #
+   #
+   # Much of the text of the output will be the same.  Put the common stuff in a variable so we can simplify the outputs
+   #
+   $output_details = "Active power source is $apcats{atsStatusSelectedSource}.  model:$apcats{atsIdentModelNumber}  serial:$apcats{atsIdentSerialNumber}";
+   #
+   # Change the atsStatusRedundancySate from integers to human readable values
+   # 1=atsRedundancyLost 
+   # 2=atsFullyRedundant
+   #
+   if ( $apcats{atsStatusRedundancyState} eq "1" ) {
+      $output_details = "Redundant power lost, cannot failover to alternate source! $output_details";
+      print "$CHECK_NAME WARN $output_details | $perf_data \n";
+      exit $WARN; 
+   }
+   if ( $apcats{atsStatusRedundancyState} eq "2" ) {
+      $output_details = "Dual power sources are fully redundant. $output_details";
+   }
+   #
+   #
+   if (  $apcats{atsStatusRedundancyState} eq "unknown" ) {
+      print "$CHECK_NAME UNKNOWN - Could not determine power redundancy status.  Please investigate.  $output_details | $perf_data \n";
+      exit $UNKNOWN; 
+   }
+   #
+   #
+   if (  $apcats{atsStatusSelectedSource} eq "unknown" ) {
+      print "$CHECK_NAME UNKNOWN - Could not determine selected power source.  Please investigate.  $output_details | $perf_data \n";
+      exit $UNKNOWN; 
+   }
+   #
+   #
+   #
+   # This message gets sent if everything is ok
+   print "$CHECK_NAME OK - $output_details | $perf_data \n";
+   exit $OK;
+}                                                                       #end of subroutine
+
+
+
+
+
+# --------------------------- main body of program ----------------------
+get_options;
+sanity_checks;
+check_ats;
+print_output;
+
